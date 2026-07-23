@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+*$py.classdata/cifar-10-python.tar.gz
+data/*.tar.gz
