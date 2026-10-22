@@ -1,59 +1,18 @@
 # Import Basic Lib
 import argparse
 
-
-def _get_option(opts: argparse.Namespace, keys, default=None):
-    for opt in keys:
-        if hasattr(opts, opt):
-            return getattr(opts, opt)
-    return default
-
-
-def _normalize_dataset_name(dataset_name: str) -> str:
-    normalized = str(dataset_name).lower().replace("_", "").replace(" ", "")
-    if normalized in ["imagenet"]:
-        return "imagenet"
-    if normalized in ["cifar10", "cifar-10"]:
-        return "cifar-10"
-    if normalized in ["cifar100", "cifar-100"]:
-        return "cifar-100"
-    raise ValueError(f"Unsupported dataset '{dataset_name}'")
-
-
-def _normalize_model_name(model_name: str) -> str:
-    normalized = str(model_name).lower().replace("_", "").replace(" ", "")
-    if normalized.startswith("resnet"):
-        return "resnet"
-    if normalized.startswith("densenet"):
-        return "densenet"
-    if normalized.startswith("mobilenet"):
-        return "mobilenet"
-    if normalized in ["mobilevit", "exmobilevit"]:
-        return normalized
-    return normalized
+# Import Custom Lib
+from dataset.info import get_dataset_info
+from dataset.transform import transform
 
 
 # Get datasets
 def get_datasets(opts: argparse.Namespace, **kwargs):
-    data = _normalize_dataset_name(_get_option(opts, ["dataset", "data"], "imagenet"))
-    model = _normalize_model_name(_get_option(opts, ["model", "Model"], "resnet"))
-
-    pairing_dict = {
-        "resnet": ["imagenet", "cifar-100", "cifar-10"],
-        "mobilenet": ["imagenet", "cifar-100", "cifar-10"],
-        "densenet": ["imagenet", "cifar-100", "cifar-10"],
-        "mobilevit": ["imagenet", "cifar-100", "cifar-10"],
-        "exmobilevit": ["imagenet", "cifar-100", "cifar-10"],
-    }
-
-    if data not in pairing_dict.get(model, []):
-        raise ValueError(f"Model '{model}' is not compatible with dataset '{data}'")
-
-    from dataset.transform import transform
-
+    info = get_dataset_info(getattr(opts, "dataset", "imagenet"))
     train_transform, val_transform = transform(opts)
+    download = getattr(opts, "download_data", False)
 
-    if data == "imagenet":
+    if info.name == "imagenet":
         from torchvision.datasets import ImageNet
 
         return {
@@ -61,40 +20,12 @@ def get_datasets(opts: argparse.Namespace, **kwargs):
             "validation": ImageNet(root=opts.data_root, split="val", transform=val_transform),
         }
 
-    if data == "cifar-10":
-        from torchvision.datasets import CIFAR10
+    if info.name == "cifar10":
+        from torchvision.datasets import CIFAR10 as dataset_cls
+    else:
+        from torchvision.datasets import CIFAR100 as dataset_cls
 
-        return {
-            "train": CIFAR10(
-                root=opts.data_root,
-                train=True,
-                transform=train_transform,
-                download=getattr(opts, "download_data", False),
-            ),
-            "validation": CIFAR10(
-                root=opts.data_root,
-                train=False,
-                transform=val_transform,
-                download=getattr(opts, "download_data", False),
-            ),
-        }
-
-    if data == "cifar-100":
-        from torchvision.datasets import CIFAR100
-
-        return {
-            "train": CIFAR100(
-                root=opts.data_root,
-                train=True,
-                transform=train_transform,
-                download=getattr(opts, "download_data", False),
-            ),
-            "validation": CIFAR100(
-                root=opts.data_root,
-                train=False,
-                transform=val_transform,
-                download=getattr(opts, "download_data", False),
-            ),
-        }
-
-    raise ValueError(f"Unsupported dataset '{data}'")
+    return {
+        "train": dataset_cls(root=opts.data_root, train=True, transform=train_transform, download=download),
+        "validation": dataset_cls(root=opts.data_root, train=False, transform=val_transform, download=download),
+    }

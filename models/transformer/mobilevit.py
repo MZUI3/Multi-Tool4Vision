@@ -1,18 +1,11 @@
+"""MobileViT / ExMobileViT — "MobileViT: Light-weight, General-purpose, and Mobile-friendly Vision Transformer"
+(Mehta & Rastegari, 2022). Project-specific compact variants.
+"""
 import torch
 import torch.nn as nn
 
-
-class ConvBNAct(nn.Sequential):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=None, groups=1, activation=True):
-        if padding is None:
-            padding = kernel_size // 2
-        layers = [
-            nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, padding=padding, groups=groups, bias=False),
-            nn.BatchNorm2d(out_channels),
-        ]
-        if activation:
-            layers.append(nn.SiLU(inplace=True))
-        super().__init__(*layers)
+from ..layers import ConvBNAct
+from ..registry import register_model
 
 
 class FeedForward(nn.Module):
@@ -166,3 +159,16 @@ class ExMobileViT(nn.Module):
         x = self.mobilevit_block2(x)
         x = self.conv3(x)
         return self.classifier(x)
+
+
+_spec = dict(category="transformer", family="MobileViT", paper="Mehta & Rastegari, 2022")
+
+
+@register_model("mobilevit", **_spec)
+def build_mobilevit(num_classes=1000, img_size=224):
+    return MobileViT(num_classes=num_classes)
+
+
+@register_model("exmobilevit", **_spec)
+def build_exmobilevit(num_classes=1000, img_size=224):
+    return ExMobileViT(num_classes=num_classes)
