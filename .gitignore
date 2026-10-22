@@ -1,6 +1,10 @@
 __pycache__/
 *.py[cod]
-*$py.classdata/cifar-10-python.tar.gz
+*$py.class
+
+# datasets
 data/*.tar.gz
-./data
-./checkpoints/
+
+# checkpoints written during training (the committed *_best.pth files stay tracked)
+checkpoints/*_last.pth
+*.pth.tmp

@@ -1,16 +1,11 @@
 import collections
-import os
+import warnings
 from typing import Optional
 
 import torch
 from torch.utils.data import DistributedSampler, Sampler, WeightedRandomSampler
 
-
-def _resolve_ddp_args(opts):
-    rank = int(os.environ.get("RANK", getattr(opts, "rank", 0)))
-    world_size = int(os.environ.get("WORLD_SIZE", getattr(opts, "world_size", 1)))
-    local_rank = int(os.environ.get("LOCAL_RANK", getattr(opts, "local_rank", 0)))
-    return rank, world_size, local_rank
+from utils.distributed import get_ddp_args
 
 
 def _get_dataset_targets(dataset):
@@ -26,7 +21,9 @@ def _get_dataset_targets(dataset):
 
 def create_sampler(dataset, opts, shuffle: bool = True) -> Optional[Sampler]:
     if getattr(opts, "ddp", False):
-        rank, world_size, _ = _resolve_ddp_args(opts)
+        if getattr(opts, "sampler", "default") == "weighted" and shuffle:
+            warnings.warn("--sampler weighted is ignored under DDP; DistributedSampler is used instead.")
+        rank, world_size, _ = get_ddp_args(opts)
         return DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle)
 
     if getattr(opts, "sampler", "default") == "weighted":
