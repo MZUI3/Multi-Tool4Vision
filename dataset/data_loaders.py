@@ -18,7 +18,7 @@ def create_train_val_loader(opts: argparse.Namespace):
 
     dataset = get_datasets(opts)
     train_sampler = create_sampler(dataset["train"], opts, shuffle=train_shuffle)
-    val_sampler = create_sampler(dataset["validation"], opts, shuffle=val_shuffle) if getattr(opts, "ddp", False) else None
+    val_sampler = create_sampler(dataset["validation"], opts, shuffle=val_shuffle, evaluation=True)
 
     common = dict(
         batch_size=batch_size,

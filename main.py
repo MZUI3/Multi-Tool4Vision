@@ -4,14 +4,13 @@ import random
 
 import torch
 import torch.nn as nn
-from torch.nn.parallel import DistributedDataParallel
 
 from options import format_opts, get_opts
-from dataset import create_train_val_loader, get_dataset_info
+from dataset import DATASETS, create_train_val_loader, get_dataset_info
 from models import CATEGORIES, get_model_spec, list_models, resolve_input_size
 from trainer import train_one_epoch, validate
 from utils.checkpoint import count_parameters, load_checkpoint, save_checkpoint
-from utils.distributed import cleanup_ddp, get_ddp_args, get_rank, is_main_process, setup_ddp
+from utils.distributed import cleanup_ddp, get_rank, get_world_size, is_main_process, resolve_device, setup_ddp, wrap_parallel
 from utils.optim import build_optimizer, build_scheduler, sync_scheduler_lr
 
 
@@ -22,18 +21,6 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-
-
-def _resolve_device(opts: argparse.Namespace) -> torch.device:
-    device_name = getattr(opts, "device", "cpu")
-    if getattr(opts, "ddp", False) and not str(device_name).startswith("cpu") and torch.cuda.is_available():
-        _, _, local_rank = get_ddp_args(opts)
-        return torch.device(f"cuda:{local_rank}")
-
-    if torch.cuda.is_available() and str(device_name).startswith("cuda"):
-        return torch.device(device_name)
-
-    return torch.device("cpu")
 
 
 def log(message: str) -> None:
@@ -56,11 +43,23 @@ def print_model_list(category=None) -> None:
             print(f"  {family:28s} {members[0].paper}")
             print(f"    {', '.join(m.name for m in members)}")
 
+    print("\nDatasets")
+    for info in DATASETS.values():
+        classes = info.num_classes if info.num_classes is not None else "inferred from folders"
+        extra = f" | {info.layout}" if info.layout else " | --download-data supported"
+        print(f"  {info.name:12s} {str(classes):>22s} classes | {info.native_size}px | {info.augment} aug{extra}")
+
 
 def build_model(opts: argparse.Namespace):
     """Resolve the input size for (model, dataset) and build the model. Updates ``opts.resize``."""
     spec = get_model_spec(opts.model)
-    info = get_dataset_info(opts.dataset)
+    data_root = opts.data_root if os.path.isdir(os.path.join(opts.data_root, "train")) else None
+    info = get_dataset_info(opts.dataset, data_root, opts.num_classes)
+    if info.num_classes is None:
+        raise ValueError(
+            f"Dataset '{info.name}' infers its classes from {info.layout}; "
+            f"prepare that layout under --data-root {opts.data_root} or pass --num-classes"
+        )
     img_size, adjusted = resolve_input_size(spec, opts.resize, info.native_size)
     if adjusted:
         log(f"{spec.name} needs a larger input than {info.native_size}px; resizing {info.name} images to {img_size}px")
@@ -83,12 +82,15 @@ def run(opts: argparse.Namespace) -> None:
 
 def _run(opts: argparse.Namespace, ddp_active: bool) -> None:
     set_seed(opts.seed + get_rank())
-    device = _resolve_device(opts)
+    device = resolve_device(opts)
     model, info = build_model(opts)
     model = model.to(device)
 
-    log(f"Using device: {device} | distributed: {ddp_active}")
-    log(f"Model: {opts.model} ({count_parameters(model) / 1e6:.2f}M params) | dataset: {info.name} | input: {opts.resize}px")
+    log(f"Using device: {device} | parallel: {opts.parallel}" + (f" x{get_world_size()} processes" if ddp_active else ""))
+    log(
+        f"Model: {opts.model} ({count_parameters(model) / 1e6:.2f}M params) | "
+        f"dataset: {info.name} ({info.num_classes} classes) | input: {opts.resize}px"
+    )
 
     if opts.mode in ("print", "summary"):
         if is_main_process():
@@ -126,12 +128,7 @@ def _run(opts: argparse.Namespace, ddp_active: bool) -> None:
             start_epoch, best_acc = state["epoch"] + 1, state["best_acc"]
             log(f"Resuming from epoch {start_epoch} (best val_acc={best_acc:.4f})")
 
-    if ddp_active:
-        if opts.sync_bn and device.type == "cuda":
-            model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        elif opts.sync_bn:
-            log("--sync-bn needs CUDA; keeping regular BatchNorm")
-        model = DistributedDataParallel(model, device_ids=[device.index] if device.type == "cuda" else None)
+    model = wrap_parallel(model, opts, device, log)
 
     train_loader, val_loader, train_sampler, val_sampler = create_train_val_loader(opts)
     criterion = nn.CrossEntropyLoss(label_smoothing=opts.label_smoothing)
@@ -149,8 +146,6 @@ def _run(opts: argparse.Namespace, ddp_active: bool) -> None:
     for epoch in range(start_epoch, opts.epochs + 1):
         if hasattr(train_sampler, "set_epoch"):
             train_sampler.set_epoch(epoch)
-        if hasattr(val_sampler, "set_epoch"):
-            val_sampler.set_epoch(epoch)
 
         lr = optimizer.param_groups[0]["lr"]
         train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device, scaler, opts.grad_clip)
