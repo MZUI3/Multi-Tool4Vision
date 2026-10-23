@@ -79,9 +79,22 @@ python main.py --mode list --category transformer  # 카테고리별 (cnn, light
 
 모델 이름은 대소문자 · `_` · `-`를 구분하지 않습니다 (`ResNet-18` = `resnet18`). 오타를 내면 비슷한 이름을 제안합니다.
 
+### 지원 데이터셋
+
+| 이름 | 클래스 | 기본 해상도 | 증강 | 준비 방법 |
+|---|---|---|---|---|
+| `cifar10`, `cifar100` | 10 / 100 | 32 | pad-crop | `--download-data` |
+| `stl10` | 10 | 96 | pad-crop | `--download-data` |
+| `imagenet` | 1000 | 224 | RandomResizedCrop | `<data-root>`에 ILSVRC tar + devkit, 또는 압축 해제된 `train/<wnid>/`, `val/<wnid>/` |
+| `food101`, `flowers102`, `oxford_pets` | 101 / 102 / 37 | 224 | RandomResizedCrop | `--download-data` |
+| `imagefolder` (별칭 `folder`) | 폴더에서 자동 추론 | 224 | RandomResizedCrop | `<data-root>/train/<class>/*.jpg`, `<data-root>/val/<class>/*.jpg` |
+
+- 자신의 이미지로 학습하려면 `imagefolder` 레이아웃으로 폴더만 만들면 됩니다. 클래스 수는 `train/` 하위 폴더 수로 정해지고, `--num-classes`로 덮어쓸 수 있습니다.
+- 32 · 96px처럼 이미 잘려 있는 작은 이미지는 pad-crop 계열 증강을, 크기가 제각각인 큰 이미지는 ImageNet 계열 증강(RandomResizedCrop / Resize + CenterCrop)을 사용합니다. 정규화 mean/std도 데이터셋별로 다릅니다.
+
 #### 구현 메모
 
-- 직접 구현한 CNN은 입력이 64px 이하(CIFAR 등)이면 stride 1 stem을 사용해 특징맵이 너무 일찍 1x1로 줄어들지 않게 합니다.
+- **작은 입력(64px 이하) 적응**: 직접 구현한 CNN은 stride 1 stem을 사용해 특징맵이 너무 일찍 1x1로 줄어들지 않게 합니다. torchvision 모델에도 같은 규칙을 적용합니다. ResNet/ResNeXt/WRN/DenseNet/GoogLeNet은 3x3 stride-1 stem + 풀링 제거, MobileNet/EfficientNet/MnasNet/ShuffleNet/RegNet/SqueezeNet은 첫 conv stride 1, ConvNeXt/Swin은 2x2 패치 stem, VGG는 512→클래스 분류기, torchvision ViT-B는 4px(b_16)/8px(b_32) 패치입니다. 128px 이상 입력에서는 torchvision 원본 구조 그대로입니다.
 - ViT / DeiT / CaiT / MLP-Mixer의 패치 크기는 입력이 128px 이상이면 16, 그보다 작으면 4로 자동 선택됩니다.
 - DeiT는 teacher 없이 학습하므로 distillation head도 정답 라벨로 학습하고, 두 head의 평균을 예측으로 사용합니다.
 - RepVGG / MobileOne은 학습 후 `models.reparameterize_model(model)`로 추론용 단일 conv 구조로 변환할 수 있습니다.
@@ -94,8 +107,9 @@ main.py                 # 진입점: list / print / summary / train / eval
 trainer.py              # train_one_epoch, validate (AMP, grad clip, DDP metric reduce)
 options/parser.py       # CLI 옵션
 dataset/
-  info.py               # 데이터셋 메타데이터(클래스 수, 기본 해상도, mean/std) 단일 관리
-  dataset.py, transform.py, sampler.py, data_loaders.py
+  info.py               # 데이터셋 메타데이터(클래스 수, 기본 해상도, mean/std, 증강 종류) 단일 관리
+  dataset.py            # CIFAR / STL10 / ImageNet(tar 또는 폴더) / Food101 / Flowers102 / Pets / ImageFolder
+  transform.py, sampler.py, data_loaders.py
 models/
   registry.py           # @register_model, create_model, list_models, 입력 크기 검증
   layers.py             # ConvBNAct, SqueezeExcite, DropPath, LayerScale, 재파라미터화 도구 등 공용 블록
@@ -103,7 +117,9 @@ models/
   torchvision_zoo.py    # torchvision 모델 등록
   cnn/  lightweight/  transformer/   # 직접 구현한 모델
 utils/
-  distributed.py, optim.py (optimizer/scheduler), checkpoint.py (저장/불러오기/재개)
+  distributed.py        # DP / DDP 래핑, 디바이스 선택, 프로세스 그룹
+  optim.py              # optimizer / scheduler
+  checkpoint.py         # 저장 / 불러오기 / 재개
 ```
 
 #### 새 모델 추가하기
@@ -177,6 +193,13 @@ python main.py --model mobilevit --dataset cifar10 --epochs 20 --checkpoint-path
 python main.py --model mobilevit --dataset cifar10 --mode eval --checkpoint-path ./checkpoints/mobilevit_cifar10_best.pth
 ```
 
+ImageNet / 자체 이미지 폴더로 학습하기:
+
+```bash
+python main.py --model resnet50 --dataset imagenet --data-root /data/imagenet --epochs 90 --batch-size 256 --lr 0.1 --amp
+python main.py --model efficientnet_b0 --dataset imagefolder --data-root ./my_images --epochs 30 --amp
+```
+
 쉘 스크립트로 실행:
 
 ```bash
@@ -191,8 +214,8 @@ python main.py --model mobilevit --dataset cifar10 --mode eval --checkpoint-path
 4. epochs: 학습 epoch 수
 5. batch_size: 배치 크기
 6. device: 실행 디바이스 (`cpu`, `cuda`, `cuda:0`)
-7. ddp: `ddp` 또는 `true`로 설정해 distributed training 사용
-8. nproc_per_node: `torchrun`에 전달할 프로세스 / GPU 개수
+7. parallel: `none`(기본) / `dp` / `ddp`(또는 `true`)
+8. nproc_per_node: `ddp`일 때 `torchrun`에 전달할 프로세스 / GPU 개수
 9. 이후 인자: `main.py`에 그대로 전달 (예: `--optimizer adamw --amp`)
 
 ### 예시
@@ -223,23 +246,35 @@ python main.py --model mobilevit --dataset cifar10 --mode eval --checkpoint-path
 python main.py --model mobilevit --dataset cifar10 --download-data --sampler weighted
 ```
 
-DDP 모드에서는 자동으로 `DistributedSampler`가 사용됩니다 (`weighted`는 무시되고 경고가 출력됩니다).
+DDP 모드에서는 자동으로 `DistributedSampler`가 사용됩니다 (`weighted`는 무시되고 경고가 출력됩니다). DP 모드에서는 그대로 동작합니다.
 
-### DDP (Distributed Data Parallel)
+### 멀티 GPU: DP와 DDP
 
-멀티 GPU 환경에서는 `torchrun`을 사용합니다.
+`--parallel` 옵션으로 고릅니다.
+
+| 모드 | 실행 방법 | 프로세스 | `--batch-size` 의미 | 언제 쓰나 |
+|---|---|---|---|---|
+| `none` | `python main.py` | 1 | 전체 배치 | 단일 GPU / CPU |
+| `dp` | `python main.py --parallel dp` | 1 | 전체 배치 (GPU 수로 분할) | 간단히 GPU 2~4장 묶을 때 |
+| `ddp` | `torchrun --nproc_per_node=N main.py` | GPU당 1 | 프로세스당 배치 | 속도 · 확장성이 중요할 때 (권장) |
+
+**DP (`nn.DataParallel`)** — 한 프로세스에서 모든 GPU(또는 `--gpu-ids 0,1`)에 배치를 나눠 보냅니다. 설정이 가장 간단하지만 GPU 0에 부하가 몰립니다.
 
 ```bash
-torchrun --nproc_per_node=2 main.py --model mobilevit --dataset cifar10 --download-data --ddp --epochs 20 --batch-size 32
+python main.py --model resnet50 --dataset cifar100 --download-data --parallel dp --gpu-ids 0,1 --batch-size 256 --amp
+./run.sh resnet50 cifar100 ./checkpoints 90 256 cuda dp
 ```
 
-또는 `run.sh`를 사용하여 DDP를 실행할 수 있습니다.
+**DDP (`DistributedDataParallel`)** — GPU마다 프로세스를 띄웁니다. `torchrun`으로 실행하면 `--parallel ddp`가 자동으로 켜집니다.
 
 ```bash
-./run.sh mobilevit cifar10 ./checkpoints 20 32 cuda:0 ddp 2
+torchrun --nproc_per_node=2 main.py --model mobilevit --dataset cifar10 --download-data --epochs 20 --batch-size 32
+./run.sh mobilevit cifar10 ./checkpoints 20 32 cuda ddp 2
 ```
 
-이 경우 `--batch-size`는 각 프로세스당 배치 크기입니다. `--sync-bn`으로 SyncBatchNorm을 켤 수 있습니다 (CUDA 전용).
+- `--sync-bn`: BatchNorm을 SyncBatchNorm으로 바꿉니다 (DDP + CUDA 전용).
+- 학습은 `DistributedSampler`, 검증은 패딩 없는 샤딩을 사용해 검증 지표가 정확히 전체 검증셋 기준으로 계산됩니다.
+- 체크포인트는 rank 0만 저장하며, DP/DDP 래퍼 없이 저장되므로 어느 모드에서든 다시 불러올 수 있습니다.
 
 ### 추가 옵션
 
@@ -251,5 +286,6 @@ torchrun --nproc_per_node=2 main.py --model mobilevit --dataset cifar10 --downlo
 - `--amp`: mixed precision (CUDA 전용, 16GB 이하 GPU에서 메모리 절약)
 - `--num-workers`: 데이터 로더 워커 수
 - `--resize`: 입력 이미지 크기
+- `--parallel`, `--gpu-ids`, `--sync-bn`: 멀티 GPU 설정 (위 참고)
 - `--master-addr`, `--master-port`: DDP 마스터 주소와 포트
 - `--backend`: DDP 백엔드 (`nccl` 또는 `gloo`)

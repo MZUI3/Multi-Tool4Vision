@@ -3,23 +3,25 @@ set -e
 
 if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
   cat <<'EOF'
-Usage: ./run.sh [model] [dataset] [save_dir] [epochs] [batch_size] [device] [ddp] [nproc_per_node] [extra main.py args...]
+Usage: ./run.sh [model] [dataset] [save_dir] [epochs] [batch_size] [device] [parallel] [nproc_per_node] [extra main.py args...]
 
 Arguments:
   model           Model name (run `python main.py --mode list` for every registered model)
-  dataset         Dataset name (cifar10, cifar100, imagenet)
+  dataset         Dataset name (cifar10, cifar100, stl10, imagenet, food101, flowers102, oxford_pets, imagefolder)
   save_dir        Directory to save checkpoints
   epochs          Number of training epochs
-  batch_size      Batch size for training
+  batch_size      Batch size (total for single/dp, per process for ddp)
   device          Device string for PyTorch (cpu, cuda, cuda:0, ...)
-  ddp             Set to 'ddp' or 'true' to launch distributed training with torchrun
-  nproc_per_node  Number of processes / GPUs for distributed training
+  parallel        none (default) | dp (nn.DataParallel, one process) | ddp or true (torchrun, one process per GPU)
+  nproc_per_node  Number of processes / GPUs for ddp
 
 Anything after the 8th argument is forwarded to main.py.
 
 Example:
   ./run.sh mobilevit cifar10 ./checkpoints 20 64 cpu
-  ./run.sh vit_tiny cifar10 ./checkpoints 100 128 cuda false 1 --optimizer adamw --lr 1e-3 --warmup-epochs 5 --amp
+  ./run.sh resnet50 imagenet ./checkpoints 90 256 cuda dp 1 --data-root /data/imagenet --amp
+  ./run.sh resnet50 imagenet ./checkpoints 90 64 cuda ddp 4 --data-root /data/imagenet --amp
+  ./run.sh vit_tiny cifar10 ./checkpoints 100 128 cuda none 1 --optimizer adamw --lr 1e-3 --warmup-epochs 5 --amp
 EOF
   exit 0
 fi
@@ -30,28 +32,27 @@ SAVE_DIR="${3:-./checkpoints}"
 EPOCHS="${4:-20}"
 BATCH_SIZE="${5:-64}"
 DEVICE="${6:-cpu}"
-DDP_MODE="${7:-false}"
+PARALLEL="${7:-none}"
 NPROC_PER_NODE="${8:-2}"
 EXTRA_ARGS=("${@:9}")
 
-if [ "$DDP_MODE" = "ddp" ] || [ "$DDP_MODE" = "true" ]; then
-  torchrun --nproc_per_node="${NPROC_PER_NODE}" main.py \
-    --model "${MODEL}" \
-    --dataset "${DATASET}" \
-    --download-data \
-    --save-dir "${SAVE_DIR}" \
-    --epochs "${EPOCHS}" \
-    --batch-size "${BATCH_SIZE}" \
-    --ddp \
-    "${EXTRA_ARGS[@]}"
-else
-  python main.py \
-    --model "${MODEL}" \
-    --dataset "${DATASET}" \
-    --download-data \
-    --save-dir "${SAVE_DIR}" \
-    --epochs "${EPOCHS}" \
-    --batch-size "${BATCH_SIZE}" \
-    --device "${DEVICE}" \
-    "${EXTRA_ARGS[@]}"
-fi
+COMMON_ARGS=(
+  --model "${MODEL}"
+  --dataset "${DATASET}"
+  --download-data
+  --save-dir "${SAVE_DIR}"
+  --epochs "${EPOCHS}"
+  --batch-size "${BATCH_SIZE}"
+)
+
+case "${PARALLEL}" in
+  ddp|true)
+    torchrun --nproc_per_node="${NPROC_PER_NODE}" main.py "${COMMON_ARGS[@]}" --parallel ddp "${EXTRA_ARGS[@]}"
+    ;;
+  dp)
+    python main.py "${COMMON_ARGS[@]}" --device "${DEVICE}" --parallel dp "${EXTRA_ARGS[@]}"
+    ;;
+  *)
+    python main.py "${COMMON_ARGS[@]}" --device "${DEVICE}" "${EXTRA_ARGS[@]}"
+    ;;
+esac

@@ -3,6 +3,8 @@ import argparse
 import json
 import torch
 
+from utils.distributed import launched_by_torchrun
+
 
 def build_parser():
     parser = argparse.ArgumentParser("Personal_Model_HUB")
@@ -10,8 +12,15 @@ def build_parser():
     # Model / data
     parser.add_argument("--model", type=str, default="resnet18", help="Model architecture (see `--mode list`)")
     parser.add_argument("--category", type=str, default=None, help="Filter `--mode list` by category (cnn, lightweight, transformer)")
-    parser.add_argument("--dataset", type=str, default="cifar10", help="Dataset name (cifar10, cifar100, imagenet)")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="cifar10",
+        help="Dataset name: cifar10, cifar100, stl10, imagenet, food101, flowers102, oxford_pets, "
+        "or imagefolder (<data-root>/train/<class>/*, <data-root>/val/<class>/*)",
+    )
     parser.add_argument("--data-root", type=str, default="./data", help="Dataset root directory")
+    parser.add_argument("--num-classes", type=int, default=None, help="Override the class count (needed for imagefolder in print/summary mode)")
     parser.add_argument("--download-data", action="store_true", help="Download dataset if needed")
     parser.add_argument(
         "--resize",
@@ -58,8 +67,18 @@ def build_parser():
     parser.add_argument("--save-dir", type=str, default="./checkpoints", help="Path to save checkpoints")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
-    # Distributed
-    parser.add_argument("--ddp", action="store_true", help="Enable distributed data parallel training")
+    # Multi-GPU
+    parser.add_argument(
+        "--parallel",
+        type=str,
+        choices=["none", "dp", "ddp"],
+        default="none",
+        help="none: single device | dp: nn.DataParallel in one process (total batch split over --gpu-ids) | "
+        "ddp: DistributedDataParallel, one process per GPU via torchrun (batch is per process). "
+        "Launching with torchrun selects ddp automatically",
+    )
+    parser.add_argument("--gpu-ids", type=str, default=None, help="GPUs for --parallel dp, e.g. 0,1,2 (default: all visible)")
+    parser.add_argument("--ddp", action="store_true", help="Alias for --parallel ddp")
     parser.add_argument("--sync-bn", action="store_true", help="Convert BatchNorm to SyncBatchNorm under DDP")
     parser.add_argument("--local-rank", type=int, default=0, help="Local rank for distributed training")
     parser.add_argument("--rank", type=int, default=0, help="Global rank for distributed training")
@@ -75,6 +94,13 @@ def get_opts(args=None):
     opts = parser.parse_args(args)
     if opts.resume and not opts.checkpoint_path:
         parser.error("--resume requires --checkpoint-path")
+    if opts.ddp:
+        opts.parallel = "ddp"
+    elif opts.parallel == "none" and launched_by_torchrun():
+        opts.parallel = "ddp"
+    opts.ddp = opts.parallel == "ddp"
+    if opts.gpu_ids and opts.parallel != "dp":
+        parser.error("--gpu-ids is only used with --parallel dp (use CUDA_VISIBLE_DEVICES for ddp)")
     return opts
 
 
