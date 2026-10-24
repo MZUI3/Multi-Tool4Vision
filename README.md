@@ -272,9 +272,3 @@ from ..registry import register_model
 def mynet_s(num_classes=1000, img_size=224):
     return MyNet(num_classes=num_classes, img_size=img_size)
 ```
-
-## 테스트한 것
-
-- 136개 모델 전부 32px 입력으로 forward가 되는지 확인했습니다.
-- CIFAR-10에서 멀티스케일 + EMA + Mixup/CutMix + RandAugment 조합, 가중 샘플러, DP 폴백, CPU 2프로세스 DDP를 짧게 돌려 동작을 확인했습니다.
-- 정확도 벤치마크는 아직 체계적으로 돌리지 않았습니다. 저장소에 들어 있는 `checkpoints/mobilevit_cifar10_best.pth`는 예시용입니다.
