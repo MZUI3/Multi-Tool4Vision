@@ -47,7 +47,11 @@ COMMON_ARGS=(
 
 case "${PARALLEL}" in
   ddp|true)
-    torchrun --nproc_per_node="${NPROC_PER_NODE}" main.py "${COMMON_ARGS[@]}" --parallel ddp "${EXTRA_ARGS[@]}"
+    if command -v torchrun >/dev/null 2>&1; then
+      torchrun --nproc_per_node="${NPROC_PER_NODE}" main.py "${COMMON_ARGS[@]}" --parallel ddp "${EXTRA_ARGS[@]}"
+    else
+      python launch_ddp.py --nproc "${NPROC_PER_NODE}" main.py "${COMMON_ARGS[@]}" --parallel ddp "${EXTRA_ARGS[@]}"
+    fi
     ;;
   dp)
     python main.py "${COMMON_ARGS[@]}" --device "${DEVICE}" --parallel dp "${EXTRA_ARGS[@]}"
