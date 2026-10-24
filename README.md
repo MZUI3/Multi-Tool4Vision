@@ -207,7 +207,7 @@ DDP에서는 모든 rank가 같은 해상도 순서와 같은 배치 수를 쓰�
 
 ## 멀티 GPU
 
-`utils/hwaccel.py` 한 파일이 디바이스 선택, DP, DDP, AMP를 담당합니다. 이 파일은 RL 쪽 저장소([topypj2](https://github.com/MZUI3/topypj2))의 `rlzoo/common/hwaccel.py`와 같은 파일이라 양쪽 옵션이 같습니다.
+`utils/hwaccel.py` 한 파일이 디바이스 선택, DP, DDP, AMP를 담당합니다. 이 파일은 RL 쪽 저장소([Mutli-Tool4RL](https://github.com/MZUI3/Mutli-Tool4RL))의 `rlzoo/common/hwaccel.py`와 같은 파일이라 양쪽 옵션이 같습니다.
 
 | 모드 | 실행 | `--batch-size` 의미 |
 |---|---|---|
