@@ -101,22 +101,23 @@ def _tv_builder(fn, adapter=None, **fixed_kwargs):
     return build
 
 
-def _tv_vit(patch_size, small_patch_size):
-    """torchvision ViT-B; 16/32px patches on ImageNet-sized inputs, 4/8px patches on small inputs."""
+def _tv_vit(patch_size, small_patch_size, large=False):
+    """torchvision ViT-B / ViT-L; 16/32px patches on ImageNet-sized inputs, 4/8px patches on small inputs."""
+    layers, heads, hidden, mlp = (24, 16, 1024, 4096) if large else (12, 12, 768, 3072)
 
     def build(num_classes=1000, img_size=224):
         patch = small_patch_size if is_small_input(img_size) else patch_size
         return tvm.VisionTransformer(
             image_size=img_size,
             patch_size=patch,
-            num_layers=12,
-            num_heads=12,
-            hidden_dim=768,
-            mlp_dim=3072,
+            num_layers=layers,
+            num_heads=heads,
+            hidden_dim=hidden,
+            mlp_dim=mlp,
             num_classes=num_classes,
         )
 
-    build.__name__ = f"vit_b_{patch_size}"
+    build.__name__ = f"vit_{'l' if large else 'b'}_{patch_size}"
     return build
 
 
@@ -151,7 +152,7 @@ transformer = partial(_register_family, category="transformer")
 # --- CNN & Residual ------------------------------------------------------------------------
 cnn(["alexnet"], family="AlexNet", paper="Krizhevsky et al., 2012", min_input_size=64)
 cnn(
-    ["vgg11_bn", "vgg13_bn", "vgg16_bn", "vgg19_bn", "vgg16"],
+    ["vgg11", "vgg11_bn", "vgg13", "vgg13_bn", "vgg16", "vgg16_bn", "vgg19", "vgg19_bn"],
     family="VGG",
     paper="Simonyan & Zisserman, 2014",
     adapter=_adapt_vgg,
@@ -176,7 +177,7 @@ cnn(
     paper="He et al., 2016",
     adapter=_adapt_resnet,
 )
-cnn(["resnext50_32x4d", "resnext101_32x8d"], family="ResNeXt", paper="Xie et al., 2017", adapter=_adapt_resnet)
+cnn(["resnext50_32x4d", "resnext101_32x8d", "resnext101_64x4d"], family="ResNeXt", paper="Xie et al., 2017", adapter=_adapt_resnet)
 cnn(
     ["wide_resnet50_2", "wide_resnet101_2"],
     family="Wide ResNet",
@@ -184,12 +185,13 @@ cnn(
     adapter=_adapt_resnet,
 )
 cnn(
-    ["regnet_x_400mf", "regnet_x_800mf", "regnet_y_400mf", "regnet_y_800mf", "regnet_y_1_6gf"],
+    ["regnet_x_400mf", "regnet_x_800mf", "regnet_x_1_6gf", "regnet_x_3_2gf", "regnet_y_400mf", "regnet_y_800mf",
+     "regnet_y_1_6gf", "regnet_y_3_2gf", "regnet_y_8gf"],
     family="RegNet",
     paper="Radosavovic et al., 2020",
     adapter=_adapt_regnet,
 )
-cnn(["convnext_tiny", "convnext_small"], family="ConvNeXt", paper="Liu et al., 2022", adapter=_adapt_patch_stem)
+cnn(["convnext_tiny", "convnext_small", "convnext_base", "convnext_large"], family="ConvNeXt", paper="Liu et al., 2022", adapter=_adapt_patch_stem)
 cnn(["densenet121", "densenet169", "densenet201"], family="DenseNet", paper="Huang et al., 2017", adapter=_adapt_densenet)
 
 # --- Lightweight & Channel Attention -------------------------------------------------------
@@ -207,20 +209,20 @@ lightweight(
     adapter=_adapt_features_stem,
 )
 lightweight(
-    ["shufflenet_v2_x0_5", "shufflenet_v2_x1_0", "shufflenet_v2_x2_0"],
+    ["shufflenet_v2_x0_5", "shufflenet_v2_x1_0", "shufflenet_v2_x1_5", "shufflenet_v2_x2_0"],
     family="ShuffleNetV2",
     paper="Ma et al., 2018",
     adapter=_adapt_shufflenet,
 )
 lightweight(["squeezenet1_0", "squeezenet1_1"], family="SqueezeNet", paper="Iandola et al., 2016", adapter=_adapt_squeezenet)
-lightweight(["mnasnet0_5", "mnasnet1_0"], family="MnasNet", paper="Tan et al., 2019", adapter=_adapt_mnasnet)
+lightweight(["mnasnet0_5", "mnasnet0_75", "mnasnet1_0", "mnasnet1_3"], family="MnasNet", paper="Tan et al., 2019", adapter=_adapt_mnasnet)
 lightweight(
-    ["efficientnet_b0", "efficientnet_b1", "efficientnet_b2", "efficientnet_b3"],
+    ["efficientnet_b0", "efficientnet_b1", "efficientnet_b2", "efficientnet_b3", "efficientnet_b4"],
     family="EfficientNet",
     paper="Tan & Le, 2019",
     adapter=_adapt_features_stem,
 )
-lightweight(["efficientnet_v2_s"], family="EfficientNetV2", paper="Tan & Le, 2021", adapter=_adapt_features_stem)
+lightweight(["efficientnet_v2_s", "efficientnet_v2_m", "efficientnet_v2_l"], family="EfficientNetV2", paper="Tan & Le, 2021", adapter=_adapt_features_stem)
 
 # --- Transformer ---------------------------------------------------------------------------
 register_builder(
@@ -229,8 +231,14 @@ register_builder(
 register_builder(
     "vit_b_32", _tv_vit(32, 8), category="transformer", family="ViT", paper="Dosovitskiy et al., 2021", input_size_divisor=32
 )
-transformer(["swin_t", "swin_s"], family="Swin Transformer", paper="Liu et al., 2021", adapter=_adapt_patch_stem)
-transformer(["swin_v2_t", "swin_v2_s"], family="Swin Transformer V2", paper="Liu et al., 2022", adapter=_adapt_patch_stem)
+register_builder(
+    "vit_l_16", _tv_vit(16, 4, large=True), category="transformer", family="ViT", paper="Dosovitskiy et al., 2021", input_size_divisor=16
+)
+register_builder(
+    "vit_l_32", _tv_vit(32, 8, large=True), category="transformer", family="ViT", paper="Dosovitskiy et al., 2021", input_size_divisor=32
+)
+transformer(["swin_t", "swin_s", "swin_b"], family="Swin Transformer", paper="Liu et al., 2021", adapter=_adapt_patch_stem)
+transformer(["swin_v2_t", "swin_v2_s", "swin_v2_b"], family="Swin Transformer V2", paper="Liu et al., 2022", adapter=_adapt_patch_stem)
 transformer(
     ["maxvit_t"],
     family="MaxViT",

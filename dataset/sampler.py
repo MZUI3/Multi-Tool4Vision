@@ -1,11 +1,11 @@
 import collections
 import warnings
-from typing import Optional
+from typing import List, Optional
 
 import torch
 from torch.utils.data import DistributedSampler, Sampler, WeightedRandomSampler
 
-from utils.distributed import get_ddp_args
+from dataset.multiscale import MultiScaleBatchSampler
 
 
 class EvalDistributedSampler(Sampler):
@@ -37,21 +37,42 @@ def _get_dataset_targets(dataset):
     return [int(t) for t in targets]
 
 
-def create_sampler(dataset, opts, shuffle: bool = True, evaluation: bool = False) -> Optional[Sampler]:
-    weighted = getattr(opts, "sampler", "default") == "weighted"
+def class_balanced_weights(dataset) -> List[float]:
+    targets = _get_dataset_targets(dataset)
+    class_counts = collections.Counter(targets)
+    return [1.0 / class_counts[target] for target in targets]
 
-    if getattr(opts, "ddp", False):
-        rank, world_size, _ = get_ddp_args(opts)
+
+def create_sampler(dataset, opts, accel=None, shuffle: bool = True, evaluation: bool = False) -> Optional[Sampler]:
+    weighted = getattr(opts, "sampler", "default") == "weighted"
+    distributed = accel is not None and accel.is_distributed
+
+    if distributed:
         if evaluation:
-            return EvalDistributedSampler(dataset, world_size, rank)
+            return EvalDistributedSampler(dataset, accel.world_size, accel.rank)
         if weighted:
             warnings.warn("--sampler weighted is ignored under DDP; DistributedSampler is used instead.")
-        return DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=shuffle)
+        return DistributedSampler(dataset, num_replicas=accel.world_size, rank=accel.rank, shuffle=shuffle)
 
     if evaluation or not weighted:
         return None
 
-    targets = _get_dataset_targets(dataset)
-    class_counts = collections.Counter(targets)
-    sample_weights = [1.0 / class_counts[target] for target in targets]
+    sample_weights = class_balanced_weights(dataset)
     return WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
+
+
+def create_multiscale_batch_sampler(dataset, opts, accel, sizes, shuffle: bool = True) -> MultiScaleBatchSampler:
+    weighted = getattr(opts, "sampler", "default") == "weighted"
+    num_replicas, rank = (accel.world_size, accel.rank) if accel is not None and accel.is_distributed else (1, 0)
+    return MultiScaleBatchSampler(
+        num_samples=len(dataset),
+        batch_size=opts.batch_size,
+        base_size=opts.resize,
+        sizes=sizes,
+        num_replicas=num_replicas,
+        rank=rank,
+        shuffle=shuffle,
+        seed=opts.seed,
+        weights=class_balanced_weights(dataset) if weighted else None,
+        scale_batch=not getattr(opts, "ms_fixed_batch", False),
+    )
