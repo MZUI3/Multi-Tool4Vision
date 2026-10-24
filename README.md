@@ -29,55 +29,31 @@ pip install -r requirements.txt
 
 GPU가 없어도 전부 돌아갑니다 (`--device cpu`). DDP도 CPU + gloo로 테스트할 수 있습니다.
 
-## 사용법
+## 학습과 평가
 
-기본 학습:
-
-```bash
-python main.py --model resnet18 --dataset cifar10 --download-data --epochs 20
-```
-
-Transformer 계열은 AdamW + warmup + AMP 조합이 잘 맞습니다:
+학습, 평가, 구조 출력은 전부 `main.py` 하나로 하고 `--mode`로 구분합니다.
 
 ```bash
-python main.py --model deit_tiny --dataset cifar10 --download-data --epochs 100 \
-  --optimizer adamw --lr 1e-3 --weight-decay 0.05 --warmup-epochs 5 --label-smoothing 0.1 --amp
-```
-
-MobileViT 논문 레시피에 가깝게 (멀티스케일 + EMA + Mixup/CutMix + RandAugment):
-
-```bash
-python main.py --model mobilevit --dataset cifar10 --download-data --epochs 100 --batch-size 128 \
-  --multi-scale --ema --mixup 0.2 --cutmix 1.0 --auto-augment rand --random-erase 0.25 --label-smoothing 0.1 \
-  --optimizer adamw --lr 2e-3 --weight-decay 0.01 --warmup-epochs 5 --amp
-```
-
-모델 구조만 확인 (데이터셋을 읽지 않음):
-
-```bash
-python main.py --model mobilevit --dataset cifar10 --mode print
-python main.py --model mobilevit --dataset cifar10 --mode summary --resize 224
-```
-
-체크포인트는 `<save-dir>/<model>_<dataset>_best.pth`, `..._last.pth`로 저장됩니다.
-
-```bash
-# 가중치만 불러와서 이어서 학습 / fine-tune
-python main.py --model mobilevit --dataset cifar10 --checkpoint-path ./checkpoints/mobilevit_cifar10_best.pth
-# 중단된 학습 재개 (optimizer, scheduler, epoch, EMA 복원)
-python main.py --model mobilevit --dataset cifar10 --epochs 20 --checkpoint-path ./checkpoints/mobilevit_cifar10_last.pth --resume
-# 평가만
+python main.py --model resnet18 --dataset cifar10 --download-data --epochs 20        # 학습
 python main.py --model mobilevit --dataset cifar10 --mode eval --checkpoint-path ./checkpoints/mobilevit_cifar10_best.pth
-```
-
-ImageNet이나 자기 이미지 폴더:
-
-```bash
+python main.py --model mobilevit --dataset cifar10 --mode print                       # 모델 구조
+python main.py --model mobilevit --dataset cifar10 --mode summary --resize 224        # 파라미터 수, 연산량 (torchinfo)
 python main.py --model resnet50 --dataset imagenet --data-root /data/imagenet --epochs 90 --batch-size 256 --lr 0.1 --amp
 python main.py --model efficientnet_b0 --dataset imagefolder --data-root ./my_images --epochs 30 --amp
 ```
 
-`run.sh`로도 실행할 수 있습니다. 인자 순서는 `model dataset save_dir epochs batch_size device parallel nproc_per_node`이고, 그 뒤는 `main.py`에 그대로 넘어갑니다.
+학습 레시피는 모델 계열에 맞춰 옵션으로 조합합니다.
+
+- CNN 기본값: SGD(nesterov) + cosine 스케줄. bias와 norm 파라미터에는 weight decay를 걸지 않습니다.
+- Transformer 계열: AdamW + warmup + label smoothing + AMP.
+  `--optimizer adamw --lr 1e-3 --weight-decay 0.05 --warmup-epochs 5 --label-smoothing 0.1 --amp`
+- MobileViT 계열: 논문의 레시피를 그대로 옵션으로 옮겼습니다. 멀티스케일 샘플러, EMA, Mixup/CutMix, RandAugment, Random Erasing.
+  `--multi-scale --ema --mixup 0.2 --cutmix 1.0 --auto-augment rand --random-erase 0.25 --label-smoothing 0.1 --optimizer adamw --lr 2e-3 --weight-decay 0.01 --warmup-epochs 5 --amp`
+
+체크포인트는 `<save-dir>/<model>_<dataset>_best.pth`와 `_last.pth` 두 개를 저장합니다. 저장은 임시 파일에 쓴 뒤 교체하므로 중간에 끊겨도 깨진 파일이 남지 않습니다.
+`--checkpoint-path`는 가중치만 불러오고, `--resume`을 붙이면 optimizer, scheduler, epoch, EMA까지 복원해서 중단된 학습을 이어갑니다.
+
+`run.sh`는 같은 일을 하는 쉘 래퍼입니다. 인자 순서는 `model dataset save_dir epochs batch_size device parallel nproc_per_node`이고, 그 뒤는 `main.py`에 그대로 넘어갑니다.
 
 ```bash
 ./run.sh mobilevit cifar10 ./checkpoints 20 64 cpu
