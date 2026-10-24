@@ -1,12 +1,35 @@
-## 이 프로젝트는 개인용 그래픽 카드(<16GB) 기반으로 모델 학습을 위한 종합 허브입니다
+# Multi-Tool4Vision — 이미지 분류 모델 136종을 한 줄로 학습하는 PyTorch 허브
 
-모든 모델은 하나의 레지스트리에 등록되어 있어 `--model <이름>` 하나로 학습 · 평가 · 요약을 할 수 있습니다.
-전체 목록은 다음 명령으로 확인할 수 있습니다.
+> **"어떤 모델이든 `--model <이름>` 하나로 학습 · 평가 · 요약"** — 개인용 GPU(16GB 이하)에서도 돌아가도록 설계한 비전 모델 실험 플랫폼입니다.
+> 53개 계열 · 136개 모델(그중 33개 계열은 논문을 보고 직접 구현)을 하나의 레지스트리에 등록하고, 데이터셋 · 증강 · 멀티 GPU · 체크포인트 재개까지 한 진입점에서 처리합니다.
 
 ```bash
-python main.py --mode list                         # 전체
-python main.py --mode list --category transformer  # 카테고리별 (cnn, lightweight, transformer)
+pip install -r requirements.txt
+python main.py --model mobilevit --dataset cifar10 --download-data --epochs 20          # 학습
+python main.py --model resnet50  --dataset cifar10 --mode summary                        # 파라미터 수 · 연산량 요약 (torchinfo)
+python launch_ddp.py --nproc 2 main.py --model convnext_tiny --dataset cifar100 --amp    # 2-GPU DDP
 ```
+
+## 한눈에 보기
+
+| 항목 | 내용 |
+|---|---|
+| 모델 | **136개 / 53계열** — CNN(ResNet ~ ConvNeXt, RepVGG, Res2Net …), 경량·채널 어텐션(MobileNet, EfficientNet, GhostNet, SE/CBAM/ECA/SK …), Transformer·MLP(ViT, DeiT, Swin, MobileViT, PVT, CoAtNet, MLP-Mixer, gMLP …). 🔧 표시는 직접 구현 |
+| 데이터셋 | CIFAR-10/100, STL-10, ImageNet, Food-101, Flowers-102, Oxford Pets, 임의의 `imagefolder` |
+| 학습 기법 | **MobileViT 멀티스케일 샘플러**, EMA, Mixup/CutMix, RandAugment/TrivialAugment/AutoAugment, Random Erasing, label smoothing, warmup + cosine/step 스케줄, AMP |
+| 하드웨어 | 단일 GPU/CPU · `nn.DataParallel` · `DistributedDataParallel`(torchrun 또는 내장 런처), SyncBN — RL 허브([topypj2](https://github.com/MZUI3/topypj2))와 **같은 가속 모듈**을 공유 |
+| 운영 | 원자적 체크포인트 저장, optimizer/scheduler/EMA까지 복원하는 `--resume`, 모델 이름 오타 자동 제안, 입력 크기 자동 검증 |
+| 의존성 | PyTorch, torchvision (선택: torchinfo) — 외부 모델 라이브러리(timm 등) 없이 동작 |
+
+## 설계 포인트
+
+- **레지스트리 기반 확장**: 모델 하나를 추가하는 데 데코레이터 한 줄이면 됩니다. 입력 최소 크기 · 배수 제약을 레지스트리가 알고 있어서, 데이터셋 해상도가 맞지 않으면 자동으로 키우거나 명확한 에러를 냅니다.
+- **작은 입력 적응**: torchvision 모델까지 포함해 64px 이하 입력에서는 stem을 stride-1 / 2×2 패치로 바꿔 CIFAR에서도 특징맵이 1×1로 무너지지 않게 했습니다.
+- **멀티스케일 샘플링(MobileViT)**: 배치마다 해상도를 바꾸고 배치 크기를 `(기본/해상도)²`로 조절해 GPU 메모리를 일정하게 유지합니다. DDP에서는 모든 rank가 같은 해상도 순서와 같은 배치 수를 쓰도록 샘플러를 설계했습니다.
+- **정확한 분산 검증 지표**: 검증 셋은 패딩 없이 rank별로 샤딩하고 손실·정답 수를 all-reduce하므로 DDP에서도 단일 GPU와 동일한 정확도가 나옵니다.
+- **하나의 가속 모듈, 두 프로젝트**: `utils/hwaccel.py`는 RL 허브와 바이트 단위로 같은 파일입니다. Windows PyTorch 휠에서 `torchrun`이 동작하지 않는 문제를 발견해 `launch_ddp.py`(동일한 환경 변수를 설정하는 런처)를 함께 제공합니다.
+
+## 지원 모델과 데이터셋
 
 ### 지원 모델 리스트 (53 계열 / 136 모델)
 
@@ -103,7 +126,7 @@ python main.py --mode list --category transformer  # 카테고리별 (cnn, light
 - RepVGG / MobileOne은 학습 후 `models.reparameterize_model(model)`로 추론용 단일 conv 구조로 변환할 수 있습니다.
 - 일부 구현은 원 논문보다 단순화했습니다: EfficientFormer의 attention bias 대신 일반 MHSA, CoAtNet은 MBConv/Transformer 블록의 세부 정규화 위치, BoTNet은 상대 위치 대신 학습형 2D 위치 임베딩(content-position) 사용.
 
-### 프로젝트 구조
+## 프로젝트 구조
 
 ```
 main.py                 # 진입점: list / print / summary / train / eval
@@ -129,7 +152,7 @@ utils/
   checkpoint.py         # 저장 / 불러오기 / 재개
 ```
 
-#### 새 모델 추가하기
+### 새 모델 추가하기
 
 `models/<카테고리>/` 아래에 파일을 만들고 `__init__.py`에서 import하면 끝입니다.
 
@@ -141,12 +164,10 @@ def mynet_s(num_classes=1000, img_size=224):
     return MyNet(num_classes=num_classes, img_size=img_size)
 ```
 
-### 요구 사항
+## 설치와 요구 사항
 
-- Python 3.8 이상
-- PyTorch 2.3 이상
-- torchvision 0.18 이상
-- (선택) torchinfo
+- Python 3.8 이상, PyTorch 2.3 이상, torchvision 0.18 이상, (선택) torchinfo
+- CPU만 있어도 모든 기능이 동작합니다 (`--device cpu`, DDP는 gloo 백엔드로 테스트 가능)
 
 설치 예시:
 
@@ -154,7 +175,7 @@ def mynet_s(num_classes=1000, img_size=224):
 pip install -r requirements.txt
 ```
 
-### 사용 방법
+## 사용 방법
 
 기본 실행:
 
@@ -225,7 +246,7 @@ python main.py --model efficientnet_b0 --dataset imagefolder --data-root ./my_im
 8. nproc_per_node: `ddp`일 때 `torchrun`에 전달할 프로세스 / GPU 개수
 9. 이후 인자: `main.py`에 그대로 전달 (예: `--optimizer adamw --amp`)
 
-### 예시
+### 예시: MobileViT 계열
 
 `MobileViT`를 CIFAR-10으로 학습하기:
 
@@ -239,13 +260,13 @@ python main.py --model efficientnet_b0 --dataset imagefolder --data-root ./my_im
 ./run.sh exmobilevit cifar100 ./checkpoints 30 64 cuda:0
 ```
 
-### 입력 크기
+### 입력 크기 규칙
 
 `--resize`를 지정하지 않으면 데이터셋 기본 해상도(CIFAR 32, ImageNet 224)를 사용합니다.
 모델이 더 큰 입력을 요구하면 자동으로 키웁니다 (예: `inception_v3`는 75, `alexnet`은 64, `maxvit_t`는 224).
 직접 지정한 `--resize`가 모델 조건에 맞지 않으면 바로 에러를 냅니다.
 
-### 샘플러 옵션
+### 샘플러 (클래스 불균형)
 
 학습 샘플링은 기본 `default` 외에 클래스 불균형 처리용 `weighted` 샘플러를 지원합니다.
 
@@ -255,7 +276,7 @@ python main.py --model mobilevit --dataset cifar10 --download-data --sampler wei
 
 DDP 모드에서는 자동으로 `DistributedSampler`가 사용됩니다 (`weighted`는 무시되고 경고가 출력됩니다). DP 모드에서는 그대로 동작합니다.
 
-### 멀티 GPU: DP와 DDP
+## 멀티 GPU: DP와 DDP
 
 하드웨어 가속 코드는 `utils/hwaccel.py` 하나에 모여 있고, RL 허브(`topypj2/rlzoo/common/hwaccel.py`)와 **같은 파일**입니다.
 두 툴 모두 같은 옵션(`--device`, `--parallel`, `--gpu-ids`, `--sync-bn`, `--backend`, `--master-addr`, `--master-port`)과 같은 동작을 가집니다.
@@ -288,7 +309,7 @@ python launch_ddp.py --nproc 2 main.py --model resnet18 --dataset cifar10 --devi
 - 체크포인트는 rank 0만 저장하며, DP/DDP 래퍼 없이 저장되므로 어느 모드에서든 다시 불러올 수 있습니다.
 - `--device auto`(기본)는 CUDA가 있으면 CUDA, 없으면 CPU입니다. `--amp`는 CUDA에서만 켜지고 CPU에서는 경고 후 무시됩니다.
 
-### 학습 기법 (MobileViT 레시피)
+## 학습 기법 (MobileViT 레시피)
 
 | 옵션 | 내용 |
 |---|---|
@@ -306,7 +327,7 @@ python main.py --model mobilevit --dataset cifar10 --download-data --epochs 100 
   --optimizer adamw --lr 2e-3 --weight-decay 0.01 --warmup-epochs 5 --amp
 ```
 
-### 추가 옵션
+## 전체 옵션
 
 - `--optimizer`: `sgd`(기본, nesterov) 또는 `adamw`. bias / norm / 토큰 파라미터에는 weight decay를 적용하지 않습니다
 - `--lr`, `--momentum`, `--weight-decay`: 학습률, SGD 모멘텀, 가중치 감쇠
@@ -319,3 +340,13 @@ python main.py --model mobilevit --dataset cifar10 --download-data --epochs 100 
 - `--device`, `--parallel`, `--gpu-ids`, `--sync-bn`: 디바이스 / 멀티 GPU 설정 (위 참고)
 - `--master-addr`, `--master-port`: DDP 마스터 주소와 포트
 - `--backend`: DDP 백엔드 (`nccl` 또는 `gloo`)
+
+## 검증
+
+- 136개 모델 전부 32px 입력에서 forward 검사를 통과했고, 멀티스케일 샘플러는 `check_variable_input`으로 모델이 가변 해상도를 지원하는지 학습 전에 확인합니다.
+- DP / DDP / EMA / Mixup / 멀티스케일 / 가중 샘플러 조합을 CIFAR-10에서 단일 프로세스와 2-프로세스 DDP(CPU, gloo)로 실행해 동작을 확인했습니다.
+- 직접 구현한 모델은 원 논문 구조를 따르되 일부 단순화한 부분(EfficientFormer attention bias, CoAtNet 정규화 위치, BoTNet 위치 임베딩)을 "구현 메모"에 명시했습니다.
+
+## 라이선스 · 기여
+
+개인 연구용 프로젝트입니다. 모델 구현에 대한 지적이나 개선 제안은 이슈로 남겨 주세요.
