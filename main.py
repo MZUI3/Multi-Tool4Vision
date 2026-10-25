@@ -133,6 +133,10 @@ def _run(opts: argparse.Namespace, accel: Accelerator) -> None:
             prefer_ema_weights=opts.ema and opts.mode == "eval",
         )
         log(f"Loaded checkpoint from {opts.checkpoint_path}" + (" (EMA weights)" if state["ema_loaded"] and opts.mode == "eval" else ""))
+        if ema is not None and not state["ema_loaded"]:
+            # The EMA was copied from the untrained model above; restart it from the loaded weights.
+            ema = ModelEMA(model, opts.ema_decay)
+            log("Checkpoint has no EMA weights; the EMA starts from the loaded weights")
         if opts.resume:
             sync_scheduler_lr(scheduler)
             start_epoch, best_acc = state["epoch"] + 1, state["best_acc"]
