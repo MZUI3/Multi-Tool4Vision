@@ -122,43 +122,30 @@ class MobileViT(nn.Module):
         return self.classifier(x)
 
 
-class ExMobileViT(nn.Module):
-    def __init__(self, num_classes=1000):
-        super().__init__()
-        self.stem = ConvBNAct(3, 24, stride=2)
-        self.conv1 = ConvBNAct(24, 48, stride=2)
-        self.conv2 = ConvBNAct(48, 96, stride=2)
-        self.mobilevit_block1 = MobileViTBlock(
-            in_channels=96,
-            transformer_dim=192,
-            num_transformer_blocks=4,
-            num_heads=6,
-            mlp_dim=384,
-            patch_size=2,
+class ExMobileViT(MobileViT):
+    """MobileViT with ExShortcut ("ExMobileViT: Lightweight Classifier Extension for Mobile Vision
+    Transformer", Yang et al., 2023). The backbone is the same as ``MobileViT``. The feature maps that
+    enter and leave the MobileViT block each pass through a 1x1 conv and global average pooling, and are
+    concatenated to the last stage's pooled output before the linear classifier."""
+
+    def __init__(self, num_classes=1000, shortcut_channels=(128, 128)):
+        super().__init__(num_classes)
+        self.shortcuts = nn.ModuleList(
+            [ConvBNAct(64, c, kernel_size=1, stride=1, padding=0) for c in shortcut_channels]
         )
-        self.mobilevit_block2 = MobileViTBlock(
-            in_channels=96,
-            transformer_dim=192,
-            num_transformer_blocks=4,
-            num_heads=6,
-            mlp_dim=384,
-            patch_size=2,
-        )
-        self.conv3 = ConvBNAct(96, 512, kernel_size=1, stride=1, padding=0)
-        self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(512, num_classes),
-        )
+        self.pool = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Flatten())
+        self.classifier = nn.Linear(320 + sum(shortcut_channels), num_classes)
 
     def forward(self, x):
         x = self.stem(x)
         x = self.conv1(x)
         x = self.conv2(x)
-        x = self.mobilevit_block1(x)
-        x = self.mobilevit_block2(x)
+        intermediate = [x]
+        x = self.mobilevit_block(x)
+        intermediate.append(x)
         x = self.conv3(x)
-        return self.classifier(x)
+        pooled = [self.pool(x)] + [self.pool(proj(f)) for proj, f in zip(self.shortcuts, intermediate)]
+        return self.classifier(torch.cat(pooled, dim=1))
 
 
 _spec = dict(category="transformer", family="MobileViT", paper="Mehta & Rastegari, 2022")
